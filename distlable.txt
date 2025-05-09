@@ -1,0 +1,86 @@
+from distilabel.pipeline import Pipeline
+from distilabel.steps import Step, StepInput
+from distilabel.steps.typing import StepOutput
+from distilabel.llms import OpenAILLM
+from distilabel.tasks import TextGenerationTask
+from typing import List, Dict
+import requests
+import base64
+from datasets import Dataset
+
+# Step 1: Custom step for API requests (same as before)
+class APIRequestStep(Step):
+    def process(self, inputs: StepInput) -> StepOutput:
+        results = []
+        for input_data in inputs:
+            login_url = input_data["login_url"]
+            consumer_key = input_data["consumer_key"]
+            consumer_secret = input_data["consumer_secret"]
+
+            apigee_creds = f"{consumer_key}:{consumer_secret}"
+            apigee_cred_b64 = base64.b64encode(apigee_creds.encode("utf-8")).decode("utf-8")
+
+            headers = {"Authorization": f"Basic {apigee_cred_b64}"}
+            data = {"grant_type": "client_credentials", "verify": False}
+
+            response = requests.post(login_url, headers=headers, data=data)
+            resp_dict = response.json()
+            access_token = resp_dict["access_token"]
+
+            results.append({"access_token": access_token, "request_headers": response.headers})
+        yield results
+
+# Step 2: Define a step that uses an LLM to process the tokens
+class ProcessTokenWithLLM(Step):
+    # Define the LLM here
+    llm = OpenAILLM(
+        model="gpt-3.5-turbo",  # Set the model here
+        api_key="your-openai-api-key",  # Replace with your OpenAI API key
+        task=TextGenerationTask(),
+    )
+
+    def process(self, inputs: StepInput) -> StepOutput:
+        results = []
+        for input_data in inputs:
+            access_token = input_data["access_token"]
+            # Use the LLM to generate a summary or process the token
+            prompt = f"Analyze this API access token: {access_token}. Provide a brief summary."
+            llm_response = self.llm.generate(inputs=[{"instruction": prompt}])[0]
+            results.append({"access_token": access_token, "llm_response": llm_response})
+        yield results
+
+# Step 3: Create the dataset (same as before)
+data = [
+    {
+        "login_url": "a",
+        "consumer_key": "b",
+        "consumer_secret": "c",
+    },
+    {
+        "login_url": "a",
+        "consumer_key": "b",
+        "consumer_secret": "c",
+    }
+]
+dataset = Dataset.from_dict({
+    "login_url": [d["login_url"] for d in data],
+    "consumer_key": [d["consumer_key"] for d in data],
+    "consumer_secret": [d["consumer_secret"] for d in data],
+})
+
+# Step 4: Define the pipeline with both steps
+with Pipeline(name="api_request_and_llm_pipeline") as pipeline:
+    api_request_step = APIRequestStep(name="api_request_step", pipeline=pipeline)
+    process_token_step = ProcessTokenWithLLM(name="process_token_step", pipeline=pipeline)
+
+    # Connect the steps: API request output feeds into the LLM step
+    api_request_step.connect(process_token_step)
+
+# Step 5: Run the pipeline
+distiset = pipeline.run(dataset=dataset)
+
+# Step 6: Access the results
+results = distiset["default"]["train"]
+for result in results:
+    print(f"Access token: {result['access_token']}")
+    print(f"LLM response: {result['llm_response']}")
