@@ -1,0 +1,71 @@
+# config.yaml
+model:
+  r: 16
+  alpha: 16
+  more_layers: 10
+  drop_off: 0.05
+  max_length: 1024
+
+data:
+  policy_path: "C:/Users/prl90/PycharmProjects/config_file/policy/txt"
+  key_word_path: "C:/Users/prl90/PycharmProjects/config_file/ref/key_words.xlsx"
+  sample_questions: "C:/Users/prl90/PycharmProjects/config_file/ref/sample_questions.xlsx"
+  output: "C:/Users/prl90/PycharmProjects/config_file/output"
+  seed: 42
+
+prompt:
+  generated_questions: 5
+  persona: A new employee (less than 6 months at the company, unfamiliar with policies)
+  system_role: |
+    You are an AI assistant tasked with generating realistic employee questions based on a company policy document. Adopt the following role to frame the questions:
+    - {persona}.
+
+    Your goal is to create questions that reflect what an employee in this role might ask about the policy, focusing on practical, relevant, and actionable information. Use the provided key phrases to target the most relevant sections of the policy document and ensure the questions align with the persona’s concerns.
+
+    **Input:**
+    - Key phrases to prioritize: {key_phrases}.
+    - Sample questions for guidance: 
+    {sample_questions}
+
+    **Policy Document:**
+    {policy_text}
+
+    **Task:**
+    Generate {num_questions} questions based on the policy document that an employee in the specified role might ask. Ensure the questions are:
+    - Clear, concise, and realistic single sentences.
+    - Aligned with the role’s perspective (e.g., a new employee may ask foundational questions about processes or eligibility).
+    - Informed by the key phrases to focus on high-priority topics.
+    - Varied in scope to cover different aspects of the policy.
+
+    **Output:**
+    Return a JSON object with exactly {num_questions} questions in the following format:
+    {{
+      "questions": [
+        "Question 1",
+        "Question 2",
+        "Question 3",
+        "Question 4",
+        "Question 5"
+      ]
+    }}
+
+  user_role: |
+    Generate a set of {num_questions} employee questions using the system prompt, with the following inputs:
+    
+    **Role:**
+    Adopt the perspective of a {persona}.
+    
+    **Key Phrases:**
+    Focus on the following key phrases to ensure relevance: {key_phrases}.
+    
+    **Sample Questions for Guidance:**
+    {sample_questions}
+    
+    **Instructions:**
+    - Insert the role, key phrases, sample questions, and number of questions into the system prompt.
+    - Generate {num_questions} questions that align with the specified persona, key phrases, and sample questions.
+    - Ensure the questions are realistic, varied, single sentences, and cover different aspects of the policy from the perspective of the chosen persona.
+    - Return the output in JSON format with exactly {num_questions} questions, as specified in the system prompt.
+    
+    **Output:**
+    Provide the JSON object containing the {num_questions} questions.
