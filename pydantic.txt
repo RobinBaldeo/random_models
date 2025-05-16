@@ -1,0 +1,38 @@
+from pydantic import BaseModel, Field
+from typing import List
+
+class PolicyEvaluationResponse(BaseModel):
+    response: List[dict] = Field(..., min_items=1, max_items=1)
+
+    @classmethod
+    def __pydantic_extra__(cls, extra):
+        for item in extra.get("response", []):
+            if not isinstance(item, dict):
+                raise ValueError("Response must contain a dictionary")
+            if "ranking" not in item or "explanation" not in item:
+                raise ValueError("Dictionary must have 'ranking' and 'explanation' keys")
+            if not isinstance(item["ranking"], int) or not (1 <= item["ranking"] <= 10):
+                raise ValueError("Ranking must be an integer between 1 and 10")
+            if not isinstance(item["explanation"], str):
+                raise ValueError("Explanation must be a string")
+
+# Example usage
+if __name__ == "__main__":
+    data = {
+        "response": [
+            {
+                "ranking": 1,
+                "explanation": ""
+            }
+        ]
+    }
+
+    try:
+        validated_response = PolicyEvaluationResponse(**data)
+        print("Validated Response:", validated_response.dict())
+    except ValueError as e:
+        print("Validation Error:", str(e))
+
+# Context for validation:
+# Question: {Insert question about a policy here}
+# Answer: {Insert answer here}
