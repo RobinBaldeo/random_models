@@ -1,0 +1,101 @@
+import polars as pl
+import glob
+import spacy
+import numpy as np
+from sklearn.cluster import AffinityPropagation
+from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.metrics import silhouette_score
+from sklearn.manifold import TSNE
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Step 1: Load .pkl files
+file_paths = glob.glob("output/config_20250515_*.pkl")  # Matches your directory
+dfs = []
+for file in file_paths:
+    df = pl.read_pickle(file)  # Load Polars DataFrame
+    dfs.append(df)
+df = pl.concat(dfs, how="vertical")  # Combine into one DataFrame
+print(f"Loaded {len(df)} responses from {len(file_paths)} files")
+
+# Step 2: Generate SpaCy embeddings
+nlp = spacy.load("en_core_web_trf")
+print("Generating embeddings...")
+# Polars doesn't have a direct vector column, so convert to list for embeddings
+responses = df["general_questions"].to_list()
+embeddings = np.array([nlp(str(text)).vector for text in responses])
+df = df.with_columns(pl.Series("embedding", embeddings))
+pl.DataFrame({"embeddings": embeddings}).write_pickle("embeddings.pkl")  # Save embeddings
+
+# Step 3: AP clustering
+print("Computing cosine similarity matrix...")
+sim_matrix = cosine_similarity(embeddings)
+print("Running AP clustering...")
+ap = AffinityPropagation(affinity='precomputed', damping=0.7, random_state=42)
+df = df.with_columns(pl.Series("cluster", ap.fit_predict(sim_matrix)))
+n_clusters = len(df["cluster"].unique()) - (1 if -1 in df["cluster"] else 0)
+print(f"Number of clusters: {n_clusters}")
+if n_clusters > 1:
+    sil_score = silhouette_score(embeddings, df["cluster"].to_numpy(), metric='cosine')
+    print(f"Silhouette Score: {sil_score:.3f}")
+
+# Step 4: Evaluate settings
+results = []
+for model in df["model"].unique():
+    for temp in df["temperature"].unique():
+        for top_p in df["top_p"].unique():
+            mask = (df["model"] == model) & (df["temperature"] == temp) & (df["top_p"] == top_p)
+            subset_emb = np.array(df.filter(mask)["embedding"].to_list())
+            if len(subset_emb) > 1:
+                sims = cosine_similarity(subset_emb)
+                avg_sim = np.mean(sims[np.triu_indices(len(sims), k=1)])
+                subset_clusters = df.filter(mask)["cluster"].nunique()
+                results.append({
+                    "model": model,
+                    "temp": temp,
+                    "top_p": top_p,
+                    "avg_cosine_sim": avg_sim,
+                    "n_clusters": subset_clusters
+                })
+results_df = pl.DataFrame(results)
+print("\nSettings Comparison (lower avg_cosine_sim = more diverse):")
+print(results_df.sort("avg_cosine_sim"))
+results_df.write_csv("settings_comparison.csv")
+
+# Cluster summary with coherence
+cluster_summary = df.group_by("cluster").agg(
+    pl.count().alias("size"),
+    pl.col("model").unique().cast(pl.List(pl.Utf8)).alias("model"),
+    pl.col("temperature").unique().cast(pl.List(pl.Float64)).alias("temp"),
+    pl.col("top_p").unique().cast(pl.List(pl.Float64)).alias("top_p"),
+    pl.col("embedding").map_elements(lambda x: np.var(np.vstack(x), axis=0).mean(), return_dtype=pl.Float64).alias("variance")
+)
+print("\nCluster Summary (lower variance = more coherent):")
+print(cluster_summary)
+
+# Representatives
+for cluster in cluster_summary["cluster"]:
+    if cluster != -1:
+        cluster_emb = np.array(df.filter(pl.col("cluster") == cluster)["embedding"].to_list())
+        centroid = np.mean(cluster_emb, axis=0)
+        distances = cosine_similarity([centroid], cluster_emb)[0]
+        rep_idx = np.argmax(distances)
+        rep_response = df.filter(pl.col("cluster") == cluster)["general_questions"][rep_idx]
+        print(f"\nCluster {cluster} Representative: {rep_response}")
+
+# Step 5: Visualize
+tsne = TSNE(n_components=2, metric='cosine', random_state=42)
+tsne_coords = tsne.fit_transform(embeddings)
+df = df.with_columns(pl.Series("tsne_x", tsne_coords[:, 0]), pl.Series("tsne_y", tsne_coords[:, 1]))
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=df.to_pandas(), x="tsne_x", y="tsne_y", hue="temperature", size="top_p", style="model", alpha=0.6)
+plt.title("t-SNE of Response Clusters by Temp, Top_p, and Model")
+plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+plt.tight_layout()
+plt.savefig("tsne_clusters.png")
+plt.figure(figsize=(10, 6))
+sns.barplot(data=results_df.to_pandas(), x="temp", y="avg_cosine_sim", hue="model")
+plt.title("Avg Cosine Similarity by Temp and Model (Lower = More Diverse)")
+plt.ylabel("Avg Cosine Similarity")
+plt.savefig("diversity_bar.png")
+df.write_csv("clustered_responses.csv")
