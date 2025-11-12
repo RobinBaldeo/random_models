@@ -1,103 +1,83 @@
-import yaml
-import argparse
-from types import SimpleNamespace
-import sys, os, re
-import pdb
-import glob
-from pathlib import Path
-import polars as pl
+from http.client import responses
+
+from decouple import config
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts.prompt import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser, JsonOutputParser
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.globals import set_debug
+from langchain_core.runnables import RunnableLambda, RunnableMap
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_core.chat_history import InMemoryChatMessageHistory
 
 
-def dict_to_obj(d):
-    if isinstance(d, dict):
-        return SimpleNamespace(**{k: dict_to_obj(v) for k, v in d.items()})
-    elif isinstance(d, list):
-        return [dict_to_obj(item) for item in d]
-    return d
+set_debug(False)
 
 
-def read_txt_file(file_path):
-    try:
-        with open(file_path, 'r', encoding='utf-8') as file:
-            content = file.read()
-        return content
-    except Exception as e:
-        print(f"Error reading {file_path}: {str(e)}")
-        return ''
+chat_template = ChatPromptTemplate.from_messages(
+    [
+        ("system", "You are a helpful AI bot. Your name is {name}"),
+        ("human",  "Hello, how are you doing?"),
+        ("ai", "I'm doing well, thanks!"),
+        ("human", "{user_input")
+    ]
+)
+
+prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You are an AI chatbot having a conversation with a human. "
+        "Use the following context to understand the human question. "
+        "Do not include emojis in your answer."
+    ),
+    MessagesPlaceholder(variable_name="chat_history"),
+    ("human", "{input}"),
+])
+
+class MyLogger(BaseCallbackHandler):
+    def on_llm_start(self, serialized, prompts, **kwargs):
+        print("LLM starting with prompt:", prompts)
+
+    def on_llm_end(self, response, **kwargs):
+        print("LLM finished, output:", response)
 
 
-def read_txt_file_path(file_path):
-    txt_dict = {}
-    for i in Path(config.data.policy_path).glob("*.txt"):
-        file_path = re.sub(".txt$", "", os.path.basename(i))
-        txt_dict[file_path] = read_txt_file(i)
-    return txt_dict
+OPENAI_KEY = config("openAi")
 
 
-if __name__ == '__main__':
+store = {}
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--config",
-        type=str,
-        required=True,
-        help="Path to the YAML configuration file"
+store = {}
+
+def get_history(session_id: str) -> InMemoryChatMessageHistory:
+    if session_id not in store:
+        store[session_id] = InMemoryChatMessageHistory()
+    return store[session_id]
+
+# ---- 3️⃣ Wrap the chain with message history ----
+
+
+if __name__ == "__main__":
+    question = "what is the currency of Thailand?"
+    llm = ChatOpenAI(model="gpt-4o-mini", api_key=OPENAI_KEY)
+    chain = prompt| llm
+    chain_with_history = RunnableWithMessageHistory(
+        chain,
+        get_history,  # returns a ChatMessageHistory
+        input_messages_key="input",  # corresponds to {input} in the prompt
+        history_messages_key="chat_history"  # corresponds to MessagesPlaceholder
     )
 
-    args = parser.parse_args()
-    experiment_name = re.sub(".yaml$", "", os.path.basename(args.config))
-    print(experiment_name)
+    question = "When was the last fifa world cup held?"
 
-    try:
-        with open(args.config, 'r') as file:
-            config_dict = yaml.safe_load(file)
-    except FileNotFoundError:
-        print(f"Error: Config file '{args.config}' not found")
-        sys.exit(1)
-    except yaml.YAMLError as e:
-        print(f"Error parsing YAML: {e}")
-        sys.exit(1)
-
-    config = dict_to_obj(config_dict)
-    policy_path_dic = read_txt_file_path(config.data.policy_path)
-
-    sample_questions_df = (
-        pl.read_excel(config.data.sample_questions)
-        .group_by('Policy')
-        .agg(
-            Policy_Questions=pl.col('Question')
-        )
-        .with_columns(
-            Policy_txt=pl.col('Policy').map_elements(lambda g: policy_path_dic.get(g, "")),
-            Sample_Questions=pl.col('Policy_Questions').list.join('|'),
-            keyword=pl.read_excel(config.data.key_word_path)['top_words'].to_list()
-        )
-        .with_columns(
-            keyword=pl.col('keyword').list.join('|')
-        )
-        .with_columns(
-            system=pl.struct(['Policy_txt', 'Sample_Questions', 'keyword']).map_elements(
-                lambda struct: config.prompt.system_role.format(
-                    persona=config.prompt.persona,
-                    num_questions=config.prompt.generated_questions,
-                    key_phrases=struct['keyword'],
-                    policy_text=struct['Policy_txt'],
-                    sample_questions=struct['Sample_Questions']
-                )
-            ),
-            user=pl.struct(['Sample_Questions', 'keyword']).map_elements(
-                lambda struct: config.prompt.user_role.format(
-                    persona=config.prompt.persona,
-                    num_questions=config.prompt.generated_questions,
-                    key_phrases=struct['keyword'] if struct['keyword'] else "None",
-                    sample_questions=struct['Sample_Questions']
-                )
-            )
-        )
+    if question:
+        response = chain_with_history.invoke(
+            {"input": question},
+            config={"configurable": {"session_id": "any"}}
         )
 
+        print(response)
 
-    print(sample_questions_df.head(5))
-    print(sample_questions_df['system'].to_list()[0])
-    # print(config.prompt.base_prompt.format(placeholder="cat"))
 
