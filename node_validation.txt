@@ -1,0 +1,61 @@
+}
+      }
+    }
+
+    // Check for duplicate labels among attached tools/MCP servers
+    const attachedToolIds: string[] = d?.tools?.attached ?? [];
+    const attachedMcpIds: string[] = d?.mcpServers?.attached ?? [];
+    const allAttachedIds = [...attachedToolIds, ...attachedMcpIds];
+
+    const labelCounts = new Map<string, number>();
+    for (const nodeId of allAttachedIds) {
+      const node = ir.nodes.find(node => node.id === nodeId);
+      if (node) {
+        const label = node.label;
+
+        // Label must be a string
+        if (typeof label !== 'string' || label.trim().length === 0) {
+          list.push({
+            path: `/nodes/${node.id}/label`,
+            message: `Tool/MCP server label is required`,
+            severity: "error"
+          });
+          continue;
+        }
+
+        // Label must not exceed 10 characters
+        if (label.length > 10) {
+          list.push({
+            path: `/nodes/${node.id}/label`,
+            message: `Label "${label}" exceeds 10 characters`,
+            severity: "error"
+          });
+        }
+
+        // Label must not start with a number
+        if (/^[0-9]/.test(label)) {
+          list.push({
+            path: `/nodes/${node.id}/label`,
+            message: `Label "${label}" cannot start with a number`,
+            severity: "error"
+          });
+        }
+
+        // Count for duplicate check
+        const count = (labelCounts.get(label) ?? 0) + 1;
+        labelCounts.set(label, count);
+      }
+    }
+
+    // Check for duplicates
+    labelCounts.forEach((count, label) => {
+      if (count > 1) {
+        list.push({
+          path: `/nodes/${n.id}/data/mcpServers/attached`,
+          message: `Duplicate label "${label}" found among attached tools/MCP servers`,
+          severity: "error"
+        });
+      }
+    });
+
+    // History window N
