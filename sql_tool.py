@@ -1,5 +1,4 @@
 """
-SQL Validation Tool for VAAF
 
 Validates SQL queries using SQLGlot AST-based parsing. The user picks a SQL
 dialect in the UI and sets limit / max_columns — everything else (date format,
@@ -525,5 +524,6 @@ async def sql_validate(
             "max_columns": max_columns,
         },
     }
+
 
     return json.dumps(output, indent=2)
