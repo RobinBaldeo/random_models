@@ -6,10 +6,15 @@ import base64
 import json
 import os
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Mapping
+
+import structlog
+
+logger = structlog.get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # NEW: Use LangGraph's native JsonPlusSerializer instead of dumpd/load
@@ -110,7 +115,15 @@ def _serialize_state(state: Any) -> dict[str, Any]:
     Stores the type tag and base64-encoded payload bytes so the outer
     envelope can still be persisted as JSON in Redis.
     """
+    start = time.monotonic()
     type_name, payload_bytes = _serde.dumps_typed(state)
+    elapsed = time.monotonic() - start
+    logger.debug(
+        "state_serialized",
+        serde_type=type_name,
+        payload_bytes=len(payload_bytes),
+        elapsed_seconds=round(elapsed, 4),
+    )
     return {
         "type": type_name,
         "payload_b64": base64.b64encode(payload_bytes).decode("ascii"),
@@ -126,8 +139,18 @@ def _deserialize_state(data: Any) -> Any:
     if isinstance(data, dict) and "type" in data and "payload_b64" in data:
         type_name = data["type"]
         payload_bytes = base64.b64decode(data["payload_b64"])
-        return _serde.loads_typed((type_name, payload_bytes))
+        start = time.monotonic()
+        result = _serde.loads_typed((type_name, payload_bytes))
+        elapsed = time.monotonic() - start
+        logger.debug(
+            "state_deserialized",
+            serde_type=type_name,
+            payload_bytes=len(payload_bytes),
+            elapsed_seconds=round(elapsed, 4),
+        )
+        return result
     # Legacy fallback: return raw dict (old checkpoints before migration)
+    logger.debug("state_deserialized_legacy_format")
     return data
 
 
@@ -346,7 +369,7 @@ class RedisCheckpointBackend:
             "thread_id": checkpoint.thread_id,
             "state": _serialize_state(checkpoint.state),
             "status": checkpoint.status.value,
-            "metadata": _serialize_state(checkpoint.metadata) if checkpoint.metadata else {},
+            "metadata": checkpoint.metadata or {},
             "created_at": checkpoint.created_at.isoformat(),
             "expires_at": checkpoint.expires_at.isoformat() if checkpoint.expires_at else None,
             "token": checkpoint.token,
@@ -357,10 +380,7 @@ class RedisCheckpointBackend:
         status = RunStatus.from_raw(str(payload.get("status") or ""), RunStatus.RUNNING)
         created_at = _parse_datetime(str(payload.get("created_at") or "")) or datetime.now(timezone.utc)
         expires_at = _parse_datetime(payload.get("expires_at"))
-        raw_metadata = payload.get("metadata") or {}
-        metadata = _deserialize_state(raw_metadata) if raw_metadata else {}
-        if not isinstance(metadata, dict):
-            metadata = {}
+        metadata = dict(payload.get("metadata") or {})
         state = _deserialize_state(payload.get("state")) if payload.get("state") else {}
         if not isinstance(state, dict):
             state = {}
@@ -382,32 +402,73 @@ class RedisCheckpointBackend:
         """Persist a checkpoint snapshot keyed by ``thread_id``."""
         thread_id = self._normalize_thread_id(checkpoint.thread_id)
         key = self._key(thread_id)
+        log = logger.bind(
+            thread_id=thread_id,
+            run_id=checkpoint.run_id,
+            status=checkpoint.status.value if hasattr(checkpoint.status, 'value') else str(checkpoint.status),
+        )
+        log.info("checkpoint_save_start")
+        start = time.monotonic()
+
         payload = json.dumps(
             self._serialize(checkpoint), separators=(",", ":"), ensure_ascii=False,
         )
+
         if self._ttl_seconds:
             await self._client.set(key, payload, ex=self._ttl_seconds)
         else:
             await self._client.set(key, payload)
 
+        elapsed = time.monotonic() - start
+        log.info(
+            "checkpoint_saved",
+            key=key,
+            payload_bytes=len(payload),
+            elapsed_seconds=round(elapsed, 4),
+            ttl_seconds=self._ttl_seconds,
+        )
+
     async def load(self, thread_id: str) -> Checkpoint | None:
         """Load a checkpoint for the given ``thread_id``, or ``None`` if absent."""
-        data = await self._client.get(self._key(thread_id))
+        key = self._key(thread_id)
+        log = logger.bind(thread_id=thread_id, key=key)
+        log.info("checkpoint_load_start")
+        start = time.monotonic()
+
+        data = await self._client.get(key)
         if not data:
+            elapsed = time.monotonic() - start
+            log.info("checkpoint_not_found", elapsed_seconds=round(elapsed, 4))
             return None
         if isinstance(data, bytes):  # pragma: no cover
             data = data.decode("utf-8")
         try:
             payload = json.loads(data)
         except json.JSONDecodeError:  # pragma: no cover
+            log.error("checkpoint_json_decode_failed")
             return None
         if not isinstance(payload, Mapping):
+            log.error("checkpoint_invalid_payload_type", payload_type=type(payload).__name__)
             return None
-        return self._deserialize(payload)
+
+        result = self._deserialize(payload)
+        elapsed = time.monotonic() - start
+        log.info(
+            "checkpoint_loaded",
+            run_id=payload.get("run_id"),
+            payload_bytes=len(data),
+            elapsed_seconds=round(elapsed, 4),
+        )
+        return result
 
     async def delete(self, thread_id: str) -> None:
         """Remove the stored checkpoint for ``thread_id``."""
-        await self._client.delete(self._key(thread_id))
+        key = self._key(thread_id)
+        log = logger.bind(thread_id=thread_id, key=key)
+        start = time.monotonic()
+        await self._client.delete(key)
+        elapsed = time.monotonic() - start
+        log.info("checkpoint_deleted", elapsed_seconds=round(elapsed, 4))
 
 
 __all__ = ["RedisCheckpointBackend", "RedisTLSConfig"]
