@@ -59,6 +59,27 @@ def _build_llm_tool_node(
 
 
 async def node_func(state: OrchestrationState):
+	    print(f"[MCP FIX] node_func entered, mcp_configs: {list(mcp_configs.keys()) if mcp_configs else 'EMPTY/NONE'}")
+
+        # MCP CHATTER FIX: open persistent MCP sessions for this tool-node invocation.
+        active_tools = tools
+        active_tool_lookup = tool_lookup
+        exit_stack = None
+
+        try:
+            if mcp_configs:
+                print(f"[MCP FIX] Opening persistent sessions for {list(mcp_configs.keys())}")
+                exit_stack, session_tools = await _load_runtime_mcp_tools(mcp_configs)
+
+                builtin_tools = [
+                    t for t in tools
+                    if not (hasattr(t, "metadata") and t.metadata and "mcp_server_name" in t.metadata)
+                ]
+
+                active_tools = builtin_tools + session_tools
+                active_tool_lookup = {t.name: t for t in active_tools}
+                print(f"[MCP FIX] Active tool count: {len(active_tools)}, session tool count: {len(session_tools)}")
+
         async def awrap(req, handler):
             # Get tool-specific interceptor config or use global config
             tool_name = req.tool_call.get("name")
