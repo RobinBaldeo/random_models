@@ -25,3 +25,16 @@ def value_lookup(frame, column, grain, name=NAME, meta=META,
             out.setdefault(str(r[metric]).lstrip("_"), pack(r))
 
     return out
+
+
+from mcp_icfo.tools.cbl.parser_helper.look_up import clean_name
+
+def driver_edges(driver_df):
+    rows = [r for r in _driver_rows(driver_df) if r["driver"]]
+    canon = {}
+    for r in rows:
+        for k in ("line", "driver"):
+            canon.setdefault(clean_name(r[k]), r[k])
+    return {"fields": ["LineType", "Line", "DriverLine", "Relationship"],
+            "edges": [[r["key"], canon[clean_name(r["line"])],
+                       canon[clean_name(r["driver"])], r["rel"]] for r in rows]}
