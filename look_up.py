@@ -38,3 +38,15 @@ def driver_edges(driver_df):
     return {"fields": ["LineType", "Line", "DriverLine", "Relationship"],
             "edges": [[r["key"], canon[clean_name(r["line"])],
                        canon[clean_name(r["driver"])], r["rel"]] for r in rows]}
+
+
+
+def _roots(records, kids, roots):
+    drivers = {r["DriverLine"] for r in records}
+    found = [l for l in dict.fromkeys(r["Line"] for r in records)
+             if l not in drivers] or list(kids)
+    wanted = {r.strip().casefold() for r in roots}
+    keep = [l for l in found if l.strip().casefold() in wanted]
+    if not keep:
+        raise MCPException(f"configured roots {roots} not found; file roots: {found}")
+    return keep
