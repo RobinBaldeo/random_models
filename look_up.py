@@ -50,3 +50,21 @@ def _roots(records, kids, roots):
     if not keep:
         raise MCPException(f"configured roots {roots} not found; file roots: {found}")
     return keep
+
+
+
+
+
+        periods = _commentary_periods()
+        tokens = [g["anchor"] for g in periods["period_groups"]] + \
+                 [p for g in periods["period_groups"] for p in g["comparison_periods"]]
+
+        drop = []
+        for tok in tokens:
+            hits = [c for c in combine.columns if tok in str(c)]
+            if len(hits) > 1:
+                drop.extend(sorted(hits, key=len)[:-1])
+
+        if drop:
+            combine = combine.drop(columns=list(dict.fromkeys(drop)))
+            num_columns = [c for c in num_columns if c in combine.columns]
