@@ -68,3 +68,11 @@ def _roots(records, kids, roots):
         if drop:
             combine = combine.drop(columns=list(dict.fromkeys(drop)))
             num_columns = [c for c in num_columns if c in combine.columns]
+
+
+
+def _select(frame, grounded, report_origin=False):
+    flat = []
+    for g in grounded:
+        flat.extend(g[1] if isinstance(g, (list, tuple)) else [g])
+    keep = [NAME] + [c for c in flat if c != NAME and VS.search(str(c))]
