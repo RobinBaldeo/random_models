@@ -1,0 +1,23 @@
+def _walk(node):
+    depth = node.get("depth") or 1
+    if depth == 1:
+        yield f"**{node['line']}**"
+    else:
+        yield "  " * (depth - 2) + f"- {node['line']}"
+    for child in node.get("children") or []:
+        yield from _walk(child)
+
+
+def _has_data(roots):
+    return bool(roots) and not roots[0].get("not_available")
+
+
+def render(material_tree):
+    if not material_tree:
+        return ""
+    sections = []
+    for metric, blocks in material_tree.items():
+        bodies = ["\n".join(_walk(roots[0])) for roots in (blocks or {}).values() if _has_data(roots)]
+        if bodies:
+            sections.append("\n\n".join([f"**{metric}**", *bodies]))
+    return "\n\n".join(sections)
